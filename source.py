@@ -25,7 +25,9 @@ val_dir = ''
 
 project='M1'             # Which MUTATION, choose from M1/M2/M3/M4 ...
 output = os.path.join('/kaggle/working/baseline-wsi-classification/Output', project)
-
+# Check if the output directory exists, if not, create it
+if not os.path.exists(output):
+    os.makedirs(output)
 batch_size = 128
 nepochs = 20
 
