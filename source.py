@@ -56,7 +56,7 @@ class MPdataset(data.Dataset):
         j = 0
         for i, path in enumerate(allslides):
             t = []
-            cpath = os.path.join(path_dir, str(path))
+            cpath = os.path.join(path_dir, str(path), "Small")
             for f in os.listdir(cpath): 
                 if '.jpg' in f:
                     t.append(os.path.join(cpath, f))
