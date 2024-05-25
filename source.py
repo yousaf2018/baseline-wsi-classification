@@ -24,7 +24,7 @@ val_lib = ''
 val_dir = ''
 
 project='M1'             # Which MUTATION, choose from M1/M2/M3/M4 ...
-output = os.path.join('Output', project)
+output = os.path.join('/kaggle/working/baseline-wsi-classification/Output', project)
 
 batch_size = 128
 nepochs = 20
