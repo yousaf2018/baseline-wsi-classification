@@ -249,6 +249,11 @@ for epoch in range(nepochs):
         val_dset.setmode(2)
         val_probs, val_acc, val_preds = inference(epoch, val_loader, model)
         
+        # Debug: Check shapes before calling group_avg
+        print(f"val_dset.slideIDX length: {len(val_dset.slideIDX)}")
+        print(f"val_preds length: {len(val_preds)}")
+        print(f"val_probs length: {len(val_probs)}")
+
         # aggregating tile scores into slide score - 3 different methods (max, average, and majority voting)
         aggregate_slide_predavg = group_avg(np.array(val_dset.slideIDX), val_preds)
         aggregate_slide_probavg = group_avg(np.array(val_dset.slideIDX), val_probs)
