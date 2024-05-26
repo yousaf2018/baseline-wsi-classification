@@ -28,8 +28,8 @@ output = os.path.join('/kaggle/working/baseline-wsi-classification/Output', proj
 # Check if the output directory exists, if not, create it
 if not os.path.exists(output):
     os.makedirs(output)
-batch_size = 512
-nepochs = 20
+batch_size = 128
+nepochs = 5
 
 test_every = 1           # related to validation set, if needed
 weights = 0.5            # weight of a positive class if imbalanced
