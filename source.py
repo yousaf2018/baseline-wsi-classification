@@ -18,7 +18,7 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 train_lib = '/kaggle/working/baseline-wsi-classification/data/train.csv'
-train_dir = '/kaggle/input/tcga-pactched-dataset/'
+train_dir = '/kaggle/input/wsi-patched-dataset-tcga/'
 
 val_lib = ''
 val_dir = ''
