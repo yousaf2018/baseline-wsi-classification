@@ -16,39 +16,32 @@ from sklearn.metrics import auc, roc_curve
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-
 train_lib = '/kaggle/working/baseline-wsi-classification/data/train.csv'
 train_dir = '/kaggle/input/patched-dataset-wsi-for-kat/'
 
-val_lib = ''
-val_dir = ''
-
-project='M1'             # Which MUTATION, choose from M1/M2/M3/M4 ...
+project = 'M1'  # Which MUTATION, choose from M1/M2/M3/M4 ...
 output = os.path.join('/kaggle/working/baseline-wsi-classification/Output', project)
-# Check if the output directory exists, if not, create it
 if not os.path.exists(output):
     os.makedirs(output)
 batch_size = 64
 nepochs = 20
 
-test_every = 1           # related to validation set, if needed
-weights = 0.5            # weight of a positive class if imbalanced
+test_every = 1  # related to validation set, if needed
+weights = 0.5  # weight of a positive class if imbalanced
 
-lr = 1e-4                # learning rate
-weight_decay = 1e-4      # l2 regularzation weight
- 
-best_auc_v = 0           # related to validation set, if needed
+lr = 1e-4  # learning rate
+weight_decay = 1e-4  # l2 regularzation weight
 
+best_auc_v = 0  # related to validation set, if needed
 
 # data loader
 class MPdataset(data.Dataset):
     def __init__(self, libraryfile='', path_dir=None, project=None, transform=None, mult=2):         
-            
-        lib = pd.DataFrame(pd.read_csv(libraryfile, usecols = ['SLIDES', project], keep_default_na=True))
+        lib = pd.DataFrame(pd.read_csv(libraryfile, usecols=['SLIDES', project], keep_default_na=True))
         lib.dropna(inplace=True)
         
         tar = lib[project].values.tolist()
-        allslides = lib['SLIDES'].values.tolist()       
+        allslides = lib['SLIDES'].values.tolist()
         print("All slides -->", allslides)
         slides = []
         tiles = []
@@ -68,7 +61,7 @@ class MPdataset(data.Dataset):
                 ntiles.append(len(t))
                 slideIDX.extend([j]*len(t))
                 targets.append(int(tar[i]))
-                j+=1
+                j += 1
                 
         print('Number of Slides: {}'.format(len(slides)))
         print('Number of tiles: {}'.format(len(tiles)))
@@ -81,37 +74,41 @@ class MPdataset(data.Dataset):
         self.mult = mult
         self.mode = None
 
-    def setmode(self,mode):
+    def setmode(self, mode):
         self.mode = mode
+        
     def maketraindata(self, idxs):
-        self.t_data = [(self.slideIDX[x],self.tiles[x],self.targets[self.slideIDX[x]]) for x in idxs]
+        self.t_data = [(self.slideIDX[x], self.tiles[x], self.targets[self.slideIDX[x]]) for x in idxs]
+        
     def shuffletraindata(self):
         self.t_data = random.sample(self.t_data, len(self.t_data))
-    def __getitem__(self,index):
-        if self.mode == 1:                                     # loads all tiles from each slide sequentially for train/validatoin set
+        
+    def __getitem__(self, index):
+        if self.mode == 1:  # loads all tiles from each slide sequentially for train/validation set
             tile = self.tiles[index]
             img = Image.open(str(tile)).convert('RGB')
             slideIDX = self.slideIDX[index]
             target = self.targets[slideIDX]
             if self.mult != 1:
-                img = img.resize((224,224),Image.BILINEAR)
-            if self.transform is not None:
-                img = self.transform(img)
-            return img, target                       
-        elif self.mode == 2:                                  # used when a different trainset is prepared e.g. with given tile index                     
-            slideIDX, tile, target = self.t_data[index]
-            img = Image.open(str(tile)).convert('RGB')
-            if self.mult != 1:
-                img = img.resize((224,224),Image.BILINEAR)
+                img = img.resize((224, 224), Image.BILINEAR)
             if self.transform is not None:
                 img = self.transform(img)
             return img, target
+        elif self.mode == 2:  # used when a different trainset is prepared e.g. with given tile index                     
+            slideIDX, tile, target = self.t_data[index]
+            img = Image.open(str(tile)).convert('RGB')
+            if self.mult != 1:
+                img = img.resize((224, 224), Image.BILINEAR)
+            if self.transform is not None:
+                img = self.transform(img)
+            return img, target
+        
     def __len__(self):
         if self.mode == 1:
             return len(self.tiles)
         elif self.mode == 2:
             return len(self.t_data)
-        
+
 def calc_roc_auc(target, prediction):
     fpr, tpr, thresholds = roc_curve(target, prediction)
     roc_auc = auc(fpr, tpr)
@@ -120,10 +117,10 @@ def calc_roc_auc(target, prediction):
 def calculate_accuracy(output, target):
     preds = output.max(1, keepdim=True)[1]
     correct = preds.eq(target.view_as(preds)).sum()
-    acc = correct.float()/preds.shape[0]
+    acc = correct.float() / preds.shape[0]
     return acc
 
-#function to calculate mean of data grouped per slide, used for aggregating tile scores into slide score
+# function to calculate mean of data grouped per slide, used for aggregating tile scores into slide score
 def group_avg(groups, data):
     order = np.lexsort((data, groups))
     groups = groups[order]
@@ -133,7 +130,7 @@ def group_avg(groups, data):
     group_average = group_sum / counts
     return group_average
 
-#function to find index of max value in data grouped per slide
+# function to find index of max value in data grouped per slide
 def group_max(groups, data, nmax):
     out = np.empty(nmax)
     out[:] = np.nan
@@ -146,21 +143,20 @@ def group_max(groups, data, nmax):
     out[groups[index]] = data[index]
     return out
 
-#baseline cnn model to fine tune
+# baseline cnn model to fine tune
 model = models.resnet18(True)
 model.fc = nn.Linear(model.fc.in_features, 2)
 model.cuda()
 
-if weights==0.5:
+if weights == 0.5:
     criterion = nn.CrossEntropyLoss().cuda()
 else:
-    w = torch.Tensor([1-weights,weights])
+    w = torch.Tensor([1-weights, weights])
     criterion = nn.CrossEntropyLoss(w).cuda()
     
 optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=lr)
 
 cudnn.benchmark = True
-
 
 # normalization
 normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
@@ -175,33 +171,43 @@ trans_Valid = transforms.Compose([
     normalize,
 ])
 
-#loading data using cutom dataloader class
+# loading data using custom dataloader class
 train_dset = MPdataset(train_lib, train_dir, project, trans)
+
+# Split dataset into train and validation sets based on slides
+slides = train_dset.slides
+random.shuffle(slides)
+split = int(np.floor(0.7 * len(slides)))
+train_slides, val_slides = slides[:split], slides[split:]
+
+# Function to get indices of tiles based on slides
+def get_indices_from_slides(dataset, slide_list):
+    indices = [i for i, slide in enumerate(dataset.slides) if slide in slide_list]
+    return indices
+
+train_indices = get_indices_from_slides(train_dset, train_slides)
+val_indices = get_indices_from_slides(train_dset, val_slides)
+
+train_dset.maketraindata(train_indices)
 train_loader = torch.utils.data.DataLoader(
     train_dset,
+    batch_size=batch_size, shuffle=True,
+    num_workers=6, pin_memory=False)
+
+val_dset = MPdataset(train_lib, train_dir, project, trans_Valid)
+val_dset.maketraindata(val_indices)
+val_loader = torch.utils.data.DataLoader(
+    val_dset,
     batch_size=batch_size, shuffle=False,
     num_workers=6, pin_memory=False)
 
-if val_lib:
-    val_dset = MPdataset(val_lib, val_dir, project, trans_Valid)
-    val_loader = torch.utils.data.DataLoader(
-        val_dset,
-        batch_size=batch_size, shuffle=False,
-        num_workers=6, pin_memory=False)
-
-#open output file, 
-fconv = open(os.path.join(output,'train_convergence.csv'), 'w')
+# open output file
+fconv = open(os.path.join(output, 'train_convergence.csv'), 'w')
 fconv.write('epoch,loss,accuracy\n')
 fconv.close()
 fconv = open(os.path.join(output, 'valid_convergence.csv'), 'w')
 fconv.write('epoch,tile-acc,max-auc,auc-avg-prob,auc-mjvt,auc-best\n')
 fconv.close()
-
-num_tiles = len(train_dset.slideIDX)
-
-# making trainset of all tiles of training set slides
-train_dset.maketraindata(np.arange(num_tiles))
-
 
 def train(run, loader, model, criterion, optimizer):
     model.train()
@@ -216,20 +222,19 @@ def train(run, loader, model, criterion, optimizer):
         loss.backward()
         optimizer.step()
 
-        running_loss += loss.item()*input.size(0)
+        running_loss += loss.item() * input.size(0)
         acc = calculate_accuracy(output, target)
-        running_acc += acc.item()*input.size(0)
-        if i%100 == 0:
+        running_acc += acc.item() * input.size(0)
+        if i % 100 == 0:
             print("Train Epoch: [{:3d}/{:3d}] Batch number: {:3d}, Training: Loss: {:.4f}, Accuracy: {:.2f}%".
-              format(run+1, nepochs, i+1, running_loss/((i+1)*input.size(0)), (100*running_acc)/((i+1)* input.size(0))))
-
-    return running_loss/len(loader.dataset), running_acc/len(loader.dataset)
+                  format(run + 1, nepochs, i + 1, running_loss / ((i + 1) * input.size(0)), (100 * running_acc) / ((i + 1) * input.size(0))))
+    return running_loss / len(loader.dataset), running_acc / len(loader.dataset)
 
 def inference(run, loader, model):
     model.eval()
     running_acc = 0.
-    probs = torch.FloatTensor(len(loader.dataset))
-    preds = torch.FloatTensor(len(loader.dataset))
+    preds = torch.zeros(len(loader.dataset))
+    probs = torch.zeros(len(loader.dataset))
     with torch.no_grad():
         for i, (input, target) in enumerate(loader):
             input = input.cuda()
@@ -243,36 +248,34 @@ def inference(run, loader, model):
             running_acc += acc.item() * input.size(0)
             if i % 100 == 0:
                 print('Inference\tEpoch: [{:3d}/{:3d}]\tBatch: [{:3d}/{}]\t acc: {:0.2f}%'
-                  .format(run + 1, nepochs, i + 1, len(loader), (100*running_acc)/((i+1)*input.size(0))))
-    return probs.cpu().numpy(), running_acc/len(loader.dataset), preds.cpu().numpy()
-
-
+                      .format(run + 1, nepochs, i + 1, len(loader), (100 * running_acc) / ((i + 1) * input.size(0))))
+    return probs.cpu().numpy(), running_acc / len(loader.dataset), preds.cpu().numpy()
 
 # measure data loading time
 start_time = time.time()
 
-#loop throuh epochs
+# loop through epochs
 for epoch in range(nepochs):
     train_dset.shuffletraindata()
     train_dset.setmode(2)
     loss, acc = train(epoch, train_loader, model, criterion, optimizer)
     
-    # measure elapsed time  so far  
-    print("--- {:0.2f} minutes ---".format((time.time() - start_time)/60.))
+    # measure elapsed time so far  
+    print("--- {:0.2f} minutes ---".format((time.time() - start_time) / 60.))
     
     print('Training\tEpoch: [{}/{}]\tLoss: {:0.4f}\tAccuracy: {:0.4f}'.
-          format(epoch+1, nepochs, loss, acc))
+          format(epoch + 1, nepochs, loss, acc))
     
     fconv = open(os.path.join(output, 'train_convergence.csv'), 'a')
-    fconv.write('{},{:0.4f},{:0.4f}\n'.format(epoch+1,loss, acc))
+    fconv.write('{},{:0.4f},{:0.4f}\n'.format(epoch + 1, loss, acc))
     fconv.close()
 
-    #Validation if needed --- 
-    if val_lib and (epoch+1) % test_every == 0:
-        val_dset.setmode(1)
+    # Validation if needed ---
+    if (epoch + 1) % test_every == 0:
+        val_dset.setmode(2)
         val_probs, val_acc, val_preds = inference(epoch, val_loader, model)
         
-        #aggregating tile scores into slide score - 3 different methods (max, average, and majority voting)
+        # aggregating tile scores into slide score - 3 different methods (max, average, and majority voting)
         aggregate_slide_predavg = group_avg(np.array(val_dset.slideIDX), val_preds)
         aggregate_slide_probavg = group_avg(np.array(val_dset.slideIDX), val_probs)
         aggregate_slide_max = group_max(np.array(val_dset.slideIDX), val_probs, len(val_dset.slides))
@@ -285,24 +288,24 @@ for epoch in range(nepochs):
         roc_auc_max_prob = auc(fpr, tpr)
         
         print('Validation\tEpoch: [{}/{}]\t val_acc: {:0.4f}\tROC-AUC: max_prob: {:0.4f}\t avg_prob: {:0.4f}\t maj_vote: {:0.4f}\t best so far: {:0.4f}'
-              .format(epoch+1, nepochs, val_acc, roc_auc_max_prob, roc_auc_avg_prob, roc_auc_maj_vote, 
+              .format(epoch + 1, nepochs, val_acc, roc_auc_max_prob, roc_auc_avg_prob, roc_auc_maj_vote, 
                       max(best_auc_v, roc_auc_max_prob, roc_auc_avg_prob, roc_auc_maj_vote)))
         
         fconv = open(os.path.join(output, 'valid_convergence.csv'), 'a')
         fconv.write('{},{:0.4f},{:0.4f},{:0.4f},{:0.4f},{:0.4f}\n'
-                    .format(epoch+1, val_acc,roc_auc_max_prob, roc_auc_avg_prob, roc_auc_maj_vote, 
+                    .format(epoch + 1, val_acc, roc_auc_max_prob, roc_auc_avg_prob, roc_auc_maj_vote, 
                             max(best_auc_v, roc_auc_max_prob, roc_auc_avg_prob, roc_auc_maj_vote)))
         
-        #Save best model
+        # Save best model
         if max(roc_auc_max_prob, roc_auc_avg_prob, roc_auc_maj_vote) > best_auc_v:
             best_auc_v = max(roc_auc_max_prob, roc_auc_avg_prob, roc_auc_maj_vote)
             obj = {
-                'epoch': epoch+1,
+                'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
                 'best_auc_v': best_auc_v,
-                'optimizer' : optimizer.state_dict()
+                'optimizer': optimizer.state_dict()
             }
-            torch.save(obj, os.path.join(output,'checkpoint_best.pth'))
+            torch.save(obj, os.path.join(output, 'checkpoint_best.pth'))
             
     # measure accumulated elapsed time so far 
-    print("--- {:0.2f} minutes ---".format((time.time() - start_time)/60.))
+    print("--- {:0.2f} minutes ---".format((time.time() - start_time) / 60.))
