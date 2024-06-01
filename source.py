@@ -34,7 +34,6 @@ lr = 1e-4  # learning rate
 weight_decay = 1e-4  # l2 regularization weight
 best_auc_v = 0  # related to validation set, if needed
 
-# Data loader
 class MPdataset(data.Dataset):
     def __init__(self, libraryfile='', path_dir=None, project=None, transform=None, mult=2):
         lib = pd.DataFrame(pd.read_csv(libraryfile, usecols=['SLIDES', project], keep_default_na=True))
@@ -70,6 +69,7 @@ class MPdataset(data.Dataset):
         self.transform = transform
         self.mult = mult
         self.mode = None
+        self.t_data = []  # Initialize this to avoid issues in len
 
     def setmode(self, mode):
         self.mode = mode
@@ -106,72 +106,9 @@ class MPdataset(data.Dataset):
         elif self.mode == 2:
             return len(self.t_data)
 
-
-def calc_roc_auc(target, prediction):
-    fpr, tpr, thresholds = roc_curve(target, prediction)
-    roc_auc = auc(fpr, tpr)
-    return roc_auc
-
-
-def calculate_accuracy(output, target):
-    preds = output.max(1, keepdim=True)[1]
-    correct = preds.eq(target.view_as(preds)).sum()
-    acc = correct.float() / preds.shape[0]
-    return acc
-
-
-def group_avg(groups, data):
-    order = np.lexsort((data, groups))
-    groups = groups[order]
-    data = data[order]
-    unames, idx, counts = np.unique(groups, return_inverse=True, return_counts=True)
-    group_sum = np.bincount(idx, weights=data)
-    group_average = group_sum / counts
-    return group_average
-
-
-def group_max(groups, data, nmax):
-    out = np.empty(nmax)
-    out[:] = np.nan
-    order = np.lexsort((data, groups))
-    groups = groups[order]
-    data = data[order]
-    index = np.empty(len(groups), 'bool')
-    index[-1] = True
-    index[:-1] = groups[1:] != groups[:-1]
-    out[groups[index]] = data[index]
-    return out
-
-
-# Model setup
-model = models.resnet18(pretrained=True)
-model.fc = nn.Linear(model.fc.in_features, 2)
-model.cuda()
-
-if weights == 0.5:
-    criterion = nn.CrossEntropyLoss().cuda()
-else:
-    w = torch.Tensor([1 - weights, weights])
-    criterion = nn.CrossEntropyLoss(w).cuda()
-
-optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=lr)
-cudnn.benchmark = True
-
-# Normalization
-normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.1, 0.1, 0.1])
-
-trans = transforms.Compose([
-    transforms.ToTensor(),
-    normalize,
-])
-
-trans_Valid = transforms.Compose([
-    transforms.ToTensor(),
-    normalize,
-])
-
-# Loading data using custom data loader class
+# Ensure dataset mode is set before len is called
 train_dset = MPdataset(train_lib, train_dir, project, trans)
+train_dset.setmode(1)  # Set mode to ensure __len__ works correctly
 
 # Split the dataset into 70% training and 30% test
 train_indices, test_indices = train_test_split(np.arange(len(train_dset)), test_size=0.3, random_state=42)
@@ -185,6 +122,7 @@ train_loader = torch.utils.data.DataLoader(
 )
 
 test_dset = MPdataset(train_lib, train_dir, project, trans)
+test_dset.setmode(2)
 test_dset.maketraindata(test_indices)
 test_loader = torch.utils.data.DataLoader(
     test_dset,
