@@ -206,45 +206,19 @@ test_loader = torch.utils.data.DataLoader(
     num_workers=6, pin_memory=False
 )
 
-# Visualization function
-# Visualization function
-def visualize_samples(loader, num_samples=5):
-    data_iter = iter(loader)
-    images, labels = next(data_iter)  # Corrected line
-    images = images[:num_samples]
-    labels = labels[:num_samples]
-
-    fig, axes = plt.subplots(1, num_samples, figsize=(15, 3))
-    for idx, ax in enumerate(axes):
-        image = images[idx].numpy().transpose((1, 2, 0))
-        image = (image * 0.1) + 0.5  # Unnormalize
-        image = np.clip(image, 0, 1)
-        ax.imshow(image)
-        ax.axis('off')
-        ax.set_title(f"Label: {labels[idx].item()}")
-    plt.show()
-
-# Visualize some training samples
-print("Training samples:")
-visualize_samples(train_loader)
-
-# Visualize some testing samples
-print("Testing samples:")
-visualize_samples(test_loader)
-
-# open output file,
+# open output file
 fconv = open(os.path.join(output, 'train_convergence.csv'), 'w')
 fconv.write('epoch,loss,accuracy\n')
 fconv.close()
-fconv = open(os.path.join(output, 'valid_convergence.csv'), 'w')
-fconv.write('epoch,tile-acc,max-auc,auc-avg-prob,auc-mjvt,auc-best\n')
+fconv = open(os.path.join(output, 'test_convergence.csv'), 'w')
+fconv.write('epoch,loss,accuracy\n')
 fconv.close()
 
-num_tiles = len(train_dset.slideIDX)
-
-# making trainset of all tiles of training set slides
-train_dset.maketraindata(np.arange(num_tiles))
-
+# Store metrics for visualization
+train_losses = []
+train_accuracies = []
+test_losses = []
+test_accuracies = []
 
 def train(run, loader, model, criterion, optimizer):
     model.train()
@@ -259,68 +233,72 @@ def train(run, loader, model, criterion, optimizer):
         loss.backward()
         optimizer.step()
 
-        running_loss += loss.item()
-        running_acc += calculate_accuracy(output, target)
+        running_loss += loss.item() * input.size(0)
+        acc = calculate_accuracy(output, target)
+        running_acc += acc.item() * input.size(0)
+        if i % 100 == 0:
+            print("Train Epoch: [{:3d}/{:3d}] Batch number: {:3d}, Training: Loss: {:.4f}, Accuracy: {:.2f}%".
+                  format(run + 1, nepochs, i + 1, running_loss / ((i + 1) * input.size(0)), (100 * running_acc) / ((i + 1) * input.size(0))))
 
-    epoch_loss = running_loss / len(loader)
-    epoch_acc = running_acc / len(loader)
-    return epoch_loss, epoch_acc
+    return running_loss / len(loader.dataset), running_acc / len(loader.dataset)
 
 
-def inference(run, loader, model):
+def inference(run, loader, model, criterion):
     model.eval()
-    correct = 0
-    probs = []
-    targets = []
-    slideIDXs = []
+    running_loss = 0.
+    running_acc = 0.
     with torch.no_grad():
         for i, (input, target) in enumerate(loader):
             input = input.cuda()
             target = target.cuda()
             output = model(input)
-
-            prob = F.softmax(output, dim=1)[:, 1]
-            pred = output.max(1, keepdim=True)[1]
-            correct += pred.eq(target.view_as(pred)).sum().item()
-            probs.extend(prob.data.cpu().numpy())
-            targets.extend(target.data.cpu().numpy())
-            slideIDXs.extend(target.data.cpu().numpy())
-
-    probs = np.array(probs)
-    targets = np.array(targets)
-    slideIDXs = np.array(slideIDXs)
-
-    acc = correct / len(loader.dataset)
-    max_auc = calc_roc_auc(targets, group_max(slideIDXs, probs, loader.dataset.slideIDX))
-    avg_prob_auc = calc_roc_auc(targets, group_avg(slideIDXs, probs))
-    mj_vote_auc = calc_roc_auc(targets, group_max(slideIDXs, pred, loader.dataset.slideIDX))
-
-    print("\nTest set: AUCs: Max: {:.4f}, Avg_Prob: {:.4f}, Maj_Vote: {:.4f}, \n".format(max_auc, avg_prob_auc,
-                                                                                         mj_vote_auc))
-    return acc, max_auc, avg_prob_auc, mj_vote_auc
+            loss = criterion(output, target)
+            running_loss += loss.item() * input.size(0)
+            acc = calculate_accuracy(output, target)
+            running_acc += acc.item() * input.size(0)
+    return running_loss / len(loader.dataset), running_acc / len(loader.dataset)
 
 
+# training the model
 for epoch in range(nepochs):
-    # train for one epoch
     train_loss, train_acc = train(epoch, train_loader, model, criterion, optimizer)
-    print('Epoch: [{}/{}], Training: Loss: {:.4f}, Accuracy: {:.2f}%\n'.format(epoch + 1, nepochs, train_loss,
-                                                                              100 * train_acc))
+    train_losses.append(train_loss)
+    train_accuracies.append(train_acc)
 
-    # write epoch's results
     fconv = open(os.path.join(output, 'train_convergence.csv'), 'a')
-    fconv.write('{},{:.4f},{:.4f}\n'.format(epoch + 1, train_loss, train_acc))
+    fconv.write('{},{:.4f},{:.4f}\n'.format(epoch, train_loss, train_acc))
     fconv.close()
 
     if epoch % test_every == 0:
-        acc, max_auc, avg_prob_auc, mj_vote_auc = inference(epoch, test_loader, model)
-        fconv = open(os.path.join(output, 'valid_convergence.csv'), 'a')
-        fconv.write('{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f}\n'.format(epoch + 1, acc, max_auc, avg_prob_auc, mj_vote_auc,
-                                                                     max(mj_vote_auc, avg_prob_auc)))
-        fconv.close()
-        if max_auc > best_auc_v:
-            best_auc_v = max_auc
-            torch.save(model.state_dict(), os.path.join(output, 'best_epoch.pth'))
+        test_loss, test_acc = inference(epoch, test_loader, model, criterion)
+        test_losses.append(test_loss)
+        test_accuracies.append(test_acc)
 
-        torch.save(model.state_dict(), os.path.join(output, 'latest_epoch.pth'))
+        fconv = open(os.path.join(output, 'test_convergence.csv'), 'a')
+        fconv.write('{},{:.4f},{:.4f}\n'.format(epoch, test_loss, test_acc))
+        fconv.close()
+
+        print('\nTest set: Average loss: {:.4f}, Accuracy: {:.2f}%\n'.format(test_loss, 100 * test_acc))
+
+# Visualization of Training and Test metrics
+def plot_and_save(metric_values, metric_name, output_dir):
+    plt.figure()
+    epochs = range(1, len(metric_values) + 1)
+    plt.plot(epochs, metric_values, 'b', label=metric_name)
+    plt.title(f'{metric_name} over Epochs')
+    plt.xlabel('Epochs')
+    plt.ylabel(metric_name)
+    plt.legend()
+    plt.savefig(os.path.join(output_dir, f'{metric_name}.png'))
+    plt.close()
+
+# Plot and save the metrics
+plot_and_save(train_losses, 'Training Loss', output)
+plot_and_save(train_accuracies, 'Training Accuracy', output)
+plot_and_save(test_losses, 'Test Loss', output)
+plot_and_save(test_accuracies, 'Test Accuracy', output)
+
+# Save the final model
+torch.save(model.state_dict(), os.path.join(output, 'final_model.pth'))
 
 print('Training complete.')
