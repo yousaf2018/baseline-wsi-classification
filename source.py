@@ -5,6 +5,7 @@ import time
 import random
 import PIL.Image as Image
 import torch
+import torchvision.models as models
 import torch.nn as nn
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
