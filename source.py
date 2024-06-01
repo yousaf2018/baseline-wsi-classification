@@ -207,9 +207,10 @@ test_loader = torch.utils.data.DataLoader(
 )
 
 # Visualization function
+# Visualization function
 def visualize_samples(loader, num_samples=5):
     data_iter = iter(loader)
-    images, labels = data_iter.next()
+    images, labels = next(data_iter)  # Corrected line
     images = images[:num_samples]
     labels = labels[:num_samples]
 
