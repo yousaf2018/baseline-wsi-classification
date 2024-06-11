@@ -13,7 +13,8 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.utils.data as data
 import torchvision.transforms as transforms
-from sklearn.metrics import roc_auc_score, f1_score
+import torchvision.models as models
+from sklearn.metrics import auc, roc_curve
 from sklearn.model_selection import train_test_split
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -39,6 +40,7 @@ lr = 1e-4                # learning rate
 weight_decay = 1e-4      # l2 regularzation weight
 
 best_auc_v = 0           # related to validation set, if needed
+
 
 # data loader
 class MPdataset(data.Dataset):
@@ -113,11 +115,19 @@ class MPdataset(data.Dataset):
         elif self.mode == 2:
             return len(self.t_data)
 
+
+def calc_roc_auc(target, prediction):
+    fpr, tpr, thresholds = roc_curve(target, prediction)
+    roc_auc = auc(fpr, tpr)
+    return roc_auc
+
+
 def calculate_accuracy(output, target):
     preds = output.max(1, keepdim=True)[1]
     correct = preds.eq(target.view_as(preds)).sum()
     acc = correct.float() / preds.shape[0]
     return acc
+
 
 # function to calculate mean of data grouped per slide, used for aggregating tile scores into slide score
 def group_avg(groups, data):
@@ -128,6 +138,7 @@ def group_avg(groups, data):
     group_sum = np.bincount(idx, weights=data)
     group_average = group_sum / counts
     return group_average
+
 
 # function to find index of max value in data grouped per slide
 def group_max(groups, data, nmax):
@@ -141,6 +152,7 @@ def group_max(groups, data, nmax):
     index[:-1] = groups[1:] != groups[:-1]
     out[groups[index]] = data[index]
     return out
+
 
 # baseline cnn model to fine tune
 model = models.resnet18(True)
@@ -194,23 +206,24 @@ test_loader = torch.utils.data.DataLoader(
     num_workers=6, pin_memory=False
 )
 
+# open output file
+fconv = open(os.path.join(output, 'train_convergence.csv'), 'w')
+fconv.write('epoch,loss,accuracy\n')
+fconv.close()
+fconv = open(os.path.join(output, 'test_convergence.csv'), 'w')
+fconv.write('epoch,loss,accuracy\n')
+fconv.close()
+
 # Store metrics for visualization
 train_losses = []
 train_accuracies = []
-train_aucs = []
-train_f1s = []
 test_losses = []
 test_accuracies = []
-test_aucs = []
-test_f1s = []
 
 def train(run, loader, model, criterion, optimizer):
     model.train()
     running_loss = 0.
     running_acc = 0.
-    all_targets = []
-    all_preds = []
-    all_pred_labels = []
     for i, (input, target) in enumerate(loader):
         input = input.cuda()
         target = target.cuda()
@@ -223,29 +236,17 @@ def train(run, loader, model, criterion, optimizer):
         running_loss += loss.item() * input.size(0)
         acc = calculate_accuracy(output, target)
         running_acc += acc.item() * input.size(0)
-
-        all_targets.extend(target.cpu().numpy())
-        all_preds.extend(output.softmax(dim=1)[:, 1].detach().cpu().numpy())
-        all_pred_labels.extend(output.argmax(dim=1).cpu().numpy())
-
         if i % 100 == 0:
             print("Train Epoch: [{:3d}/{:3d}] Batch number: {:3d}, Training: Loss: {:.4f}, Accuracy: {:.2f}%".
                   format(run + 1, nepochs, i + 1, running_loss / ((i + 1) * input.size(0)), (100 * running_acc) / ((i + 1) * input.size(0))))
 
-    epoch_loss = running_loss / len(loader.dataset)
-    epoch_acc = running_acc / len(loader.dataset)
-    epoch_auc = roc_auc_score(all_targets, all_preds)
-    epoch_f1 = f1_score(all_targets, all_pred_labels)
-    
-    return epoch_loss, epoch_acc, epoch_auc, epoch_f1
+    return running_loss / len(loader.dataset), running_acc / len(loader.dataset)
+
 
 def inference(run, loader, model, criterion):
     model.eval()
     running_loss = 0.
     running_acc = 0.
-    all_targets = []
-    all_preds = []
-    all_pred_labels = []
     with torch.no_grad():
         for i, (input, target) in enumerate(loader):
             input = input.cuda()
@@ -255,52 +256,29 @@ def inference(run, loader, model, criterion):
             running_loss += loss.item() * input.size(0)
             acc = calculate_accuracy(output, target)
             running_acc += acc.item() * input.size(0)
+    return running_loss / len(loader.dataset), running_acc / len(loader.dataset)
 
-            all_targets.extend(target.cpu().numpy())
-            all_preds.extend(output.softmax(dim=1)[:, 1].cpu().numpy())
-            all_pred_labels.extend(output.argmax(dim=1).cpu().numpy())
 
-    epoch_loss = running_loss / len(loader.dataset)
-    epoch_acc = running_acc / len(loader.dataset)
-    epoch_auc = roc_auc_score(all_targets, all_preds)
-    epoch_f1 = f1_score(all_targets, all_pred_labels)
-    
-    return epoch_loss, epoch_acc, epoch_auc, epoch_f1
-
-# Training the model
+# training the model
 for epoch in range(nepochs):
-    train_loss, train_acc, train_auc, train_f1 = train(epoch, train_loader, model, criterion, optimizer)
+    train_loss, train_acc = train(epoch, train_loader, model, criterion, optimizer)
     train_losses.append(train_loss)
     train_accuracies.append(train_acc)
-    train_aucs.append(train_auc)
-    train_f1s.append(train_f1)
+
+    fconv = open(os.path.join(output, 'train_convergence.csv'), 'a')
+    fconv.write('{},{:.4f},{:.4f}\n'.format(epoch, train_loss, train_acc))
+    fconv.close()
 
     if epoch % test_every == 0:
-        test_loss, test_acc, test_auc, test_f1 = inference(epoch, test_loader, model, criterion)
+        test_loss, test_acc = inference(epoch, test_loader, model, criterion)
         test_losses.append(test_loss)
         test_accuracies.append(test_acc)
-        test_aucs.append(test_auc)
-        test_f1s.append(test_f1)
 
-        print('\nTest set: Average loss: {:.4f}, Accuracy: {:.2f}%, AUC: {:.4f}, F1 Score: {:.4f}\n'.format(test_loss, 100 * test_acc, test_auc, test_f1))
+        fconv = open(os.path.join(output, 'test_convergence.csv'), 'a')
+        fconv.write('{},{:.4f},{:.4f}\n'.format(epoch, test_loss, test_acc))
+        fconv.close()
 
-# Store metrics in a DataFrame
-metrics = {
-    'Epoch': range(1, nepochs + 1),
-    'Train Loss': train_losses,
-    'Train Accuracy': train_accuracies,
-    'Train AUC': train_aucs,
-    'Train F1': train_f1s,
-    'Test Loss': test_losses,
-    'Test Accuracy': test_accuracies,
-    'Test AUC': test_aucs,
-    'Test F1': test_f1s
-}
-df_metrics = pd.DataFrame(metrics)
-
-# Save the DataFrame to an Excel file
-output_excel = os.path.join(output, 'training_metrics.xlsx')
-df_metrics.to_excel(output_excel, index=False)
+        print('\nTest set: Average loss: {:.4f}, Accuracy: {:.2f}%\n'.format(test_loss, 100 * test_acc))
 
 # Visualization of Training and Test metrics
 def plot_and_save(metric_values, metric_name, output_dir):
@@ -317,12 +295,8 @@ def plot_and_save(metric_values, metric_name, output_dir):
 # Plot and save the metrics
 plot_and_save(train_losses, 'Training Loss', output)
 plot_and_save(train_accuracies, 'Training Accuracy', output)
-plot_and_save(train_aucs, 'Training AUC', output)
-plot_and_save(train_f1s, 'Training F1', output)
 plot_and_save(test_losses, 'Test Loss', output)
 plot_and_save(test_accuracies, 'Test Accuracy', output)
-plot_and_save(test_aucs, 'Test AUC', output)
-plot_and_save(test_f1s, 'Test F1', output)
 
 # Save the final model
 torch.save(model.state_dict(), os.path.join(output, 'final_model.pth'))
